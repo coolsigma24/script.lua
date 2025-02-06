@@ -1,0 +1,40 @@
+local player = game:GetService("Players").LocalPlayer
+local lastDeathPosition = nil
+
+local function logDeathPosition()
+    if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+        lastDeathPosition = player.Character.HumanoidRootPart.CFrame
+    end
+end
+
+local function teleportOnRespawn(character)
+    task.wait(0.2) -- Allow time for character to fully load
+    if lastDeathPosition and character:FindFirstChild("HumanoidRootPart") then
+        character:WaitForChild("HumanoidRootPart").CFrame = lastDeathPosition
+    end
+
+    -- Ensure the script stays persistent
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        humanoid.Died:Connect(logDeathPosition)
+    end
+end
+
+local function ensureScriptPersistence()
+    while true do
+        if player.Character then
+            local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+            if humanoid and not humanoid.Died:FindFirstAncestorWhichIsA("BindableEvent") then
+                humanoid.Died:Connect(logDeathPosition)
+            end
+        end
+        task.wait(1) -- Prevents script from stopping
+    end
+end
+
+-- Hook into character events
+player.CharacterAdded:Connect(teleportOnRespawn)
+if player.Character then teleportOnRespawn(player.Character) end
+
+-- Keep script running persistently
+task.spawn(ensureScriptPersistence)
