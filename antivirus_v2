@@ -1,0 +1,19 @@
+local player = game.Players.LocalPlayer
+local character = player.Character
+local lastDeathPosition = nil
+
+character:WaitForChild("Humanoid").Died:Connect(function()
+    lastDeathPosition = character.HumanoidRootPart.Position
+end)
+
+player.CharacterAdded:Connect(function(newCharacter)
+    newCharacter:WaitForChild("HumanoidRootPart")
+    repeat wait() until newCharacter.HumanoidRootPart ~= nil
+    if lastDeathPosition ~= nil then
+        newCharacter.HumanoidRootPart.CFrame = CFrame.new(lastDeathPosition)
+    end
+    newCharacter:WaitForChild("Humanoid").Died:Connect(function()
+        lastDeathPosition = newCharacter.HumanoidRootPart.Position
+    end)
+    character = newCharacter
+end)
