@@ -1,0 +1,223 @@
+-- Anti-Chat Exploitation Script (10-Second Version)
+-- This script blocks chat for 10 seconds to allow malicious scripts to execute safely
+-- After 10 seconds, chat functionality is restored for the user
+
+-- Store references to important services
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local StarterGui = game:GetService("StarterGui")
+
+-- Original functions we need to hook
+local originalNamecall
+local originalIndex
+local originalNewIndex
+
+-- Flag to track if chat protection is active
+local chatProtectionActive = true
+
+-- Chat remotes to intercept (common paths across different chat systems)
+local chatRemotes = {
+    ["SayMessageRequest"] = true,
+    ["ChatRemote"] = true,
+    ["MessagePosted"] = true,
+    ["Chat"] = true,
+    ["ChatChannelPost"] = true
+}
+
+-- Store potential chat remotes we find
+local detectedChatRemotes = {}
+
+-- Function to scan for chat-related remotes
+local function scanForChatRemotes()
+    -- Check ReplicatedStorage and its descendants
+    for _, instance in pairs(ReplicatedStorage:GetDescendants()) do
+        if instance:IsA("RemoteEvent") then
+            local name = instance.Name:lower()
+            if name:find("chat") or name:find("message") or name:find("say") then
+                detectedChatRemotes[instance] = true
+                print("Detected potential chat remote: " .. instance:GetFullName())
+            end
+        end
+    end
+    
+    -- Check for DefaultChatSystemChatEvents
+    if ReplicatedStorage:FindFirstChild("DefaultChatSystemChatEvents") then
+        local chatSystem = ReplicatedStorage.DefaultChatSystemChatEvents
+        if chatSystem:FindFirstChild("SayMessageRequest") then
+            detectedChatRemotes[chatSystem.SayMessageRequest] = true
+            print("Blocked default chat system")
+        end
+    end
+end
+
+-- Create fake chat functions that appear to work but don't actually send messages
+local function createFakeFunction()
+    return function() 
+        return true -- Return success to fool detection mechanisms
+    end
+end
+
+-- Original functions backup for restoration
+local originalFunctions = {}
+
+-- Spoof common chat functions to prevent detection
+local function spoofChatFunctions()
+    -- Hook StarterGui:SetCore directly via metatable
+    local StarterGuiMT = getrawmetatable(StarterGui)
+    if StarterGuiMT then
+        local oldNamecall = StarterGuiMT.__namecall
+        originalFunctions.StarterGuiNamecall = oldNamecall
+        
+        setreadonly(StarterGuiMT, false)
+        StarterGuiMT.__namecall = newcclosure(function(self, ...)
+            local method = getnamecallmethod()
+            local args = {...}
+            
+            if chatProtectionActive and self == StarterGui and (method == "SetCore" or method == "SetCoreGuiEnabled") then
+                local coreType = args[1]
+                if tostring(coreType):lower():find("chat") then
+                    return true -- Appear successful but don't actually do anything
+                end
+            end
+            
+            return oldNamecall(self, ...)
+        end)
+        setreadonly(StarterGuiMT, true)
+    end
+    
+    -- Try to spoof common chat modules
+    if game:GetService("Chat") then
+        local Chat = game:GetService("Chat")
+        
+        -- Use pcall to safely attempt function spoofing
+        pcall(function()
+            for _, funcName in pairs({"Chat", "InvokeChatCallback", "ChatLocal"}) do
+                if typeof(Chat[funcName]) == "function" then
+                    local success, err = pcall(function()
+                        -- Store original in a closure to avoid detection
+                        originalFunctions["Chat_" .. funcName] = Chat[funcName]
+                        Chat[funcName] = createFakeFunction()
+                    end)
+                    
+                    if not success then
+                        print("Failed to spoof Chat." .. funcName .. ": " .. tostring(err))
+                    end
+                end
+            end
+        end)
+    end
+end
+
+-- Setup metatable hooks to intercept chat attempts
+local function setupHooks()
+    -- Hook __namecall to intercept remote calls
+    originalNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+        local method = getnamecallmethod()
+        local args = {...}
+        
+        -- Check if this is a chat remote
+        if chatProtectionActive and (method == "FireServer" or method == "InvokeServer") and 
+           (chatRemotes[self.Name] or detectedChatRemotes[self]) then
+            print("Blocked chat attempt via " .. self:GetFullName())
+            return true -- Return success to fool scripts
+        end
+        
+        return originalNamecall(self, ...)
+    end)
+    
+    -- Hook __index to intercept attempts to get chat functions
+    originalIndex = hookmetamethod(game, "__index", function(self, key)
+        local result = originalIndex(self, key)
+        
+        -- If something is trying to access chat remotes, return fake functions
+        if chatProtectionActive and typeof(result) == "Instance" and result:IsA("RemoteEvent") and 
+           (chatRemotes[result.Name] or detectedChatRemotes[result]) then
+            print("Returning fake chat remote for: " .. result:GetFullName())
+            return {
+                FireServer = createFakeFunction(),
+                InvokeServer = createFakeFunction()
+            }
+        end
+        
+        return result
+    end)
+    
+    -- For TypewriterChat and other chat GUI systems
+    if LocalPlayer and LocalPlayer:FindFirstChild("PlayerGui") then
+        local disabledTextboxes = {}
+        
+        for _, gui in pairs(LocalPlayer.PlayerGui:GetDescendants()) do
+            if gui:IsA("TextBox") and (gui.Name:lower():find("chat") or gui.Name:lower():find("message")) then
+                pcall(function()
+                    -- Store original values
+                    disabledTextboxes[gui] = {
+                        ClearTextOnFocus = gui.ClearTextOnFocus,
+                        TextEditable = gui.TextEditable
+                    }
+                    
+                    -- Disable textbox
+                    gui.ClearTextOnFocus = false
+                    gui.TextEditable = false
+                    print("Disabled chat textbox: " .. gui:GetFullName())
+                end)
+            end
+        end
+        
+        -- Store for restoration
+        originalFunctions.disabledTextboxes = disabledTextboxes
+    end
+end
+
+-- Function to restore chat functionality
+local function restoreChatFunctionality()
+    print("Restoring chat functionality...")
+    
+    -- Set flag to inactive
+    chatProtectionActive = false
+    
+    -- Restore disabled textboxes
+    if originalFunctions.disabledTextboxes then
+        for textbox, properties in pairs(originalFunctions.disabledTextboxes) do
+            pcall(function()
+                textbox.ClearTextOnFocus = properties.ClearTextOnFocus
+                textbox.TextEditable = properties.TextEditable
+                print("Restored textbox: " .. textbox:GetFullName())
+            end)
+        end
+    end
+    
+    print("Chat functionality has been restored. You can now use chat normally.")
+end
+
+-- Main execution
+do
+    print("Starting chat protection for malicious script testing...")
+    print("Chat will be blocked for 10 seconds to allow malicious scripts to execute safely.")
+    
+    -- Initial scan for chat remotes
+    scanForChatRemotes()
+    
+    -- Set up spoofed chat functions
+    spoofChatFunctions()
+    
+    -- Install hooks
+    setupHooks()
+    
+    -- Set timer to restore chat functionality after 10 seconds
+    spawn(function()
+        local startTime = tick()
+        local endTime = startTime + 10
+        
+        -- Show countdown
+        for i = 10, 1, -1 do
+            print("Chat protection active for " .. i .. " more seconds...")
+            wait(1)
+        end
+        
+        -- Restore chat
+        restoreChatFunctionality()
+    end)
+    
+    print("Chat protection active - malicious scripts can execute but chat functions are intercepted")
+end
